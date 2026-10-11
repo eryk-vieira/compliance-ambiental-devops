@@ -1,0 +1,401 @@
+# =============================================================================
+# CI/CD - Compliance Ambiental Logtech API (.NET 8)
+#
+#  build ──► test ──► docker (GHCR) ──► deploy-staging ──► deploy-production
+#                                        (environment)      (environment c/ aprovação)
+#
+# - push em qualquer branch / PR  : build + test
+# - push em develop ou main       : + imagem Docker + deploy em STAGING
+# - push em main                  : + deploy em PRODUÇÃO (após aprovação manual
+#                                    configurada no environment "production")
+#
+# Os ambientes são orquestrados com Docker Compose (docker-compose.staging.yml e
+# docker-compose.production.yml) usando a MESMA imagem imutável (tag = commit),
+# promovida entre ambientes por re-tag no GHCR (":staging" -> ":production").
+# =============================================================================
+name: CI/CD - Compliance Ambiental API
+
+on:
+  push:
+    branches: ["main", "develop"]
+  pull_request:
+    branches: ["main"]
+  workflow_dispatch:
+
+concurrency:
+  group: cicd-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  DOTNET_VERSION: "8.0.x"
+  REGISTRY: ghcr.io
+  IMAGE_BASENAME: compliance-ambiental-api
+  DOTNET_CLI_TELEMETRY_OPTOUT: "1"
+  DOTNET_NOLOGO: "1"
+
+permissions:
+  contents: read
+
+jobs:
+  # ===========================================================================
+  # 1) BUILD
+  # ===========================================================================
+  build:
+    name: Build (.NET 8)
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+      short_sha: ${{ steps.meta.outputs.short_sha }}
+      build_date: ${{ steps.meta.outputs.build_date }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Metadados de versão
+        id: meta
+        run: |
+          SHORT_SHA="${GITHUB_SHA::7}"
+          VERSION="1.0.${GITHUB_RUN_NUMBER}+${SHORT_SHA}"
+          echo "short_sha=${SHORT_SHA}" >> "$GITHUB_OUTPUT"
+          echo "version=${VERSION}"     >> "$GITHUB_OUTPUT"
+          echo "build_date=$(date -u +'%Y-%m-%dT%H:%M:%SZ')" >> "$GITHUB_OUTPUT"
+          echo "Versão deste build: ${VERSION}"
+
+      - name: Setup .NET ${{ env.DOTNET_VERSION }}
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: Cache de pacotes NuGet
+        uses: actions/cache@v4
+        with:
+          path: ~/.nuget/packages
+          key: nuget-${{ runner.os }}-${{ hashFiles('**/*.csproj') }}
+          restore-keys: nuget-${{ runner.os }}-
+
+      - name: Restore
+        run: dotnet restore ComplianceAmbiental.sln
+
+      - name: Build (Release)
+        run: dotnet build ComplianceAmbiental.sln -c Release --no-restore
+
+      - name: Publish da API
+        run: >
+          dotnet publish src/ComplianceAmbiental.Api/ComplianceAmbiental.Api.csproj
+          -c Release --no-restore -o artifacts/publish
+
+      - name: Upload do artefato publicado
+        uses: actions/upload-artifact@v4
+        with:
+          name: api-publish-${{ steps.meta.outputs.short_sha }}
+          path: artifacts/publish
+          retention-days: 7
+
+      - name: Resumo
+        run: |
+          {
+            echo "## 🔨 Build"
+            echo "- Versão: \`${{ steps.meta.outputs.version }}\`"
+            echo "- Commit: \`${GITHUB_SHA}\`"
+            echo "- Arquivos publicados: $(find artifacts/publish -type f | wc -l)"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # ===========================================================================
+  # 2) TESTES AUTOMATIZADOS (xUnit + WebApplicationFactory + EF InMemory)
+  # ===========================================================================
+  test:
+    name: Testes automatizados (xUnit)
+    runs-on: ubuntu-latest
+    needs: build
+    permissions:
+      contents: read
+      checks: write
+      pull-requests: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET ${{ env.DOTNET_VERSION }}
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: Cache de pacotes NuGet
+        uses: actions/cache@v4
+        with:
+          path: ~/.nuget/packages
+          key: nuget-${{ runner.os }}-${{ hashFiles('**/*.csproj') }}
+          restore-keys: nuget-${{ runner.os }}-
+
+      - name: Restore
+        run: dotnet restore ComplianceAmbiental.sln
+
+      - name: dotnet test
+        run: >
+          dotnet test ComplianceAmbiental.sln -c Release --no-restore
+          --logger "trx;LogFileName=test-results.trx"
+          --logger "console;verbosity=normal"
+          --results-directory TestResults
+          --collect:"XPlat Code Coverage"
+
+      - name: Relatório de testes (check no commit/PR)
+        uses: dorny/test-reporter@v1
+        if: always()
+        with:
+          name: Resultado dos testes xUnit
+          path: TestResults/**/*.trx
+          reporter: dotnet-trx
+          fail-on-error: true
+
+      - name: Upload dos resultados (TRX + cobertura)
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: test-results-${{ needs.build.outputs.short_sha }}
+          path: TestResults
+          retention-days: 14
+
+      - name: Resumo
+        if: always()
+        run: |
+          TRX=$(find TestResults -name '*.trx' | head -n1)
+          TOTAL=$(grep -o 'total="[0-9]*"'  "$TRX" | head -1 | grep -o '[0-9]*')
+          PASSED=$(grep -o 'passed="[0-9]*"' "$TRX" | head -1 | grep -o '[0-9]*')
+          FAILED=$(grep -o 'failed="[0-9]*"' "$TRX" | head -1 | grep -o '[0-9]*')
+          {
+            echo "## 🧪 Testes"
+            echo "| Total | Aprovados | Falhas |"
+            echo "|---:|---:|---:|"
+            echo "| ${TOTAL:-0} | ${PASSED:-0} | ${FAILED:-0} |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # ===========================================================================
+  # 3) IMAGEM DOCKER -> GitHub Container Registry
+  # ===========================================================================
+  docker:
+    name: Imagem Docker (GHCR)
+    runs-on: ubuntu-latest
+    needs: [build, test]
+    if: github.event_name != 'pull_request'
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      image: ${{ steps.names.outputs.image }}
+      image_sha_tag: ${{ steps.names.outputs.image }}:sha-${{ needs.build.outputs.short_sha }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Nome da imagem (lowercase)
+        id: names
+        run: echo "image=${REGISTRY}/${GITHUB_REPOSITORY_OWNER,,}/${IMAGE_BASENAME}" >> "$GITHUB_OUTPUT"
+
+      - name: Setup Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login no GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Tags e labels
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ steps.names.outputs.image }}
+          tags: |
+            type=raw,value=sha-${{ needs.build.outputs.short_sha }}
+            type=ref,event=branch
+            type=raw,value=build-${{ github.run_number }}
+
+      - name: Build & push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            APP_VERSION=${{ needs.build.outputs.version }}
+            APP_COMMIT_SHA=${{ github.sha }}
+            APP_BUILD_NUMBER=${{ github.run_number }}
+            BUILD_DATE=${{ needs.build.outputs.build_date }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Resumo
+        run: |
+          {
+            echo "## 🐳 Imagem Docker"
+            echo '```'
+            echo "${{ steps.meta.outputs.tags }}"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # ===========================================================================
+  # 4) DEPLOY -> STAGING (Docker Compose)
+  # ===========================================================================
+  deploy-staging:
+    name: Deploy STAGING
+    runs-on: ubuntu-latest
+    needs: [build, docker]
+    environment:
+      name: staging
+      url: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+    permissions:
+      contents: read
+      packages: write
+    env:
+      API_IMAGE: ${{ needs.docker.outputs.image_sha_tag }}
+    steps:
+      - name: Checkout (compose + scripts)
+        uses: actions/checkout@v4
+
+      - name: Login no GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Gerar .env.staging (secrets/variables do environment)
+        run: |
+          cat > .env.staging <<EOF
+          API_IMAGE=${API_IMAGE}
+          APP_VERSION=${{ needs.build.outputs.version }}
+          APP_COMMIT_SHA=${{ github.sha }}
+          APP_BUILD_NUMBER=${{ github.run_number }}
+          APP_DEPLOYED_AT=$(date -u +'%Y-%m-%dT%H:%M:%SZ')
+          API_PORT=${{ vars.STAGING_API_PORT || '8081' }}
+          DB_PORT=14331
+          MSSQL_SA_PASSWORD=${{ secrets.STAGING_MSSQL_SA_PASSWORD || 'Staging@Compliance2026!' }}
+          DB_NAME=ComplianceAmbiental_Staging
+          MSSQL_MEMORY_LIMIT_MB=2048
+          JWT_ISSUER=ComplianceAmbiental.Api
+          JWT_AUDIENCE=ComplianceAmbiental.Client
+          JWT_SECRET_KEY=${{ secrets.STAGING_JWT_SECRET_KEY || 'staging-jwt-secret-compliance-ambiental-logtech-2026-min-32-bytes!!' }}
+          JWT_EXPIRES_MINUTES=120
+          EOF
+          echo "Arquivo .env.staging gerado (valores sensíveis mascarados pelo Actions)."
+
+      - name: Deploy com Docker Compose + smoke test
+        run: bash scripts/deploy.sh staging
+
+      - name: Coletar evidências
+        if: always()
+        run: bash scripts/collect-evidence.sh staging || true
+
+      - name: Promover imagem -> tag ":staging"
+        run: docker buildx imagetools create -t "${{ needs.docker.outputs.image }}:staging" "${API_IMAGE}"
+
+      - name: Upload das evidências
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: evidence-staging-${{ needs.build.outputs.short_sha }}
+          path: evidence/staging
+          retention-days: 30
+
+      - name: Resumo
+        if: always()
+        run: |
+          {
+            echo "## 🚀 Deploy STAGING"
+            echo "- Imagem: \`${API_IMAGE}\` (promovida para \`:staging\`)"
+            echo "- Porta: 8081 | ASPNETCORE_ENVIRONMENT=Staging"
+            echo; echo "### /api/info"; echo '```json'; cat evidence/staging/api-info.json 2>/dev/null || echo "n/a"; echo; echo '```'
+            echo; echo "### Smoke test"; echo '```'; cat evidence/staging/smoke-test.txt 2>/dev/null || echo "n/a"; echo '```'
+            echo; echo "### docker compose ps"; echo '```'; sed -n '/## docker compose ps/,/## docker images/p' evidence/staging/ambiente.md 2>/dev/null | sed '1d;$d'; echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Encerrar ambiente efêmero do runner
+        if: always()
+        run: docker compose --env-file .env.staging -f docker-compose.staging.yml down -v --remove-orphans || true
+
+  # ===========================================================================
+  # 5) DEPLOY -> PRODUÇÃO (Docker Compose, após aprovação do environment)
+  # ===========================================================================
+  deploy-production:
+    name: Deploy PRODUÇÃO
+    runs-on: ubuntu-latest
+    needs: [build, docker, deploy-staging]
+    if: github.ref == 'refs/heads/main'
+    environment:
+      name: production
+      url: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+    permissions:
+      contents: read
+      packages: write
+    env:
+      API_IMAGE: ${{ needs.docker.outputs.image_sha_tag }}
+    steps:
+      - name: Checkout (compose + scripts)
+        uses: actions/checkout@v4
+
+      - name: Login no GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Gerar .env.production (secrets/variables do environment)
+        run: |
+          cat > .env.production <<EOF
+          API_IMAGE=${API_IMAGE}
+          APP_VERSION=${{ needs.build.outputs.version }}
+          APP_COMMIT_SHA=${{ github.sha }}
+          APP_BUILD_NUMBER=${{ github.run_number }}
+          APP_DEPLOYED_AT=$(date -u +'%Y-%m-%dT%H:%M:%SZ')
+          API_PORT=${{ vars.PRODUCTION_API_PORT || '8082' }}
+          MSSQL_SA_PASSWORD=${{ secrets.PRODUCTION_MSSQL_SA_PASSWORD || 'Prod@Compliance2026!!' }}
+          DB_NAME=ComplianceAmbiental
+          MSSQL_MEMORY_LIMIT_MB=2048
+          JWT_ISSUER=ComplianceAmbiental.Api
+          JWT_AUDIENCE=ComplianceAmbiental.Client
+          JWT_SECRET_KEY=${{ secrets.PRODUCTION_JWT_SECRET_KEY || 'production-jwt-secret-compliance-ambiental-logtech-2026-min-32-bytes' }}
+          JWT_EXPIRES_MINUTES=60
+          EOF
+          echo "Arquivo .env.production gerado (valores sensíveis mascarados pelo Actions)."
+
+      - name: Deploy com Docker Compose + smoke test
+        run: bash scripts/deploy.sh production
+
+      - name: Coletar evidências
+        if: always()
+        run: bash scripts/collect-evidence.sh production || true
+
+      - name: Promover imagem -> tags ":production" e ":latest"
+        run: >
+          docker buildx imagetools create
+          -t "${{ needs.docker.outputs.image }}:production"
+          -t "${{ needs.docker.outputs.image }}:latest"
+          "${API_IMAGE}"
+
+      - name: Upload das evidências
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: evidence-production-${{ needs.build.outputs.short_sha }}
+          path: evidence/production
+          retention-days: 30
+
+      - name: Resumo
+        if: always()
+        run: |
+          {
+            echo "## 🏭 Deploy PRODUÇÃO"
+            echo "- Imagem: \`${API_IMAGE}\` (promovida para \`:production\` e \`:latest\`)"
+            echo "- Porta: 8082 | ASPNETCORE_ENVIRONMENT=Production"
+            echo; echo "### /api/info"; echo '```json'; cat evidence/production/api-info.json 2>/dev/null || echo "n/a"; echo; echo '```'
+            echo; echo "### Smoke test"; echo '```'; cat evidence/production/smoke-test.txt 2>/dev/null || echo "n/a"; echo '```'
+            echo; echo "### docker compose ps"; echo '```'; sed -n '/## docker compose ps/,/## docker images/p' evidence/production/ambiente.md 2>/dev/null | sed '1d;$d'; echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Encerrar ambiente efêmero do runner
+        if: always()
+        run: docker compose --env-file .env.production -f docker-compose.production.yml down -v --remove-orphans || true

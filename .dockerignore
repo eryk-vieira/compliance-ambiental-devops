@@ -1,0 +1,17 @@
+**/bin/
+**/obj/
+**/.vs/
+**/.vscode/
+**/*.user
+**/node_modules/
+**/.git/
+**/.github/
+**/TestResults/
+**/docs/
+**/evidence/
+**/postman/
+**/*.md
+**/.env
+**/.env.*
+!**/.env.example
+docker-compose*.yml

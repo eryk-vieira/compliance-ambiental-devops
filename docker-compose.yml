@@ -1,0 +1,71 @@
+# =============================================================================
+# docker-compose.yml - ambiente LOCAL / desenvolvimento
+#
+# Sobe a API (buildada a partir do Dockerfile) + SQL Server 2022.
+#   cp .env.example .env            # ajuste as senhas se quiser
+#   docker compose up --build -d
+#   docker compose logs -f api
+#
+# Variáveis: lidas de .env (ou defaults abaixo). Volume nomeado preserva o banco
+# entre reinicializações; rede dedicada isola os serviços do restante do host.
+# =============================================================================
+name: compliance-dev
+
+services:
+  db:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    container_name: compliance-dev-db
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_PID: "Developer"
+      MSSQL_SA_PASSWORD: ${MSSQL_SA_PASSWORD:-Compliance@2026}
+      MSSQL_MEMORY_LIMIT_MB: ${MSSQL_MEMORY_LIMIT_MB:-2048}
+    ports:
+      - "${DB_PORT:-1433}:1433"
+    volumes:
+      - mssql-data:/var/opt/mssql
+    networks:
+      - compliance-net
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P \"$$MSSQL_SA_PASSWORD\" -C -Q \"SELECT 1\" || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+    restart: unless-stopped
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        APP_VERSION: ${APP_VERSION:-dev}
+        APP_COMMIT_SHA: ${APP_COMMIT_SHA:-local}
+        APP_BUILD_NUMBER: ${APP_BUILD_NUMBER:-local}
+    image: ${API_IMAGE:-compliance-ambiental-api:dev}
+    container_name: compliance-dev-api
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      ASPNETCORE_ENVIRONMENT: ${ASPNETCORE_ENVIRONMENT:-Development}
+      ASPNETCORE_URLS: "http://+:8080"
+      APP_ENVIRONMENT: ${APP_ENVIRONMENT:-development}
+      APP_DEPLOYED_AT: ${APP_DEPLOYED_AT:-}
+      ConnectionStrings__DefaultConnection: "Server=db,1433;Database=${DB_NAME:-ComplianceAmbiental};User Id=sa;Password=${MSSQL_SA_PASSWORD:-Compliance@2026};TrustServerCertificate=True;Encrypt=False"
+      Jwt__Issuer: ${JWT_ISSUER:-ComplianceAmbiental.Api}
+      Jwt__Audience: ${JWT_AUDIENCE:-ComplianceAmbiental.Client}
+      Jwt__SecretKey: ${JWT_SECRET_KEY:-chave-super-secreta-compliance-ambiental-logtech-2026-fiap-min-32-bytes}
+      Jwt__ExpiresInMinutes: ${JWT_EXPIRES_MINUTES:-120}
+    ports:
+      - "${API_PORT:-8080}:8080"
+    networks:
+      - compliance-net
+    restart: unless-stopped
+
+volumes:
+  mssql-data:
+
+networks:
+  compliance-net:
+    driver: bridge

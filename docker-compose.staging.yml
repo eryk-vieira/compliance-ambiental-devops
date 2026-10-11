@@ -1,0 +1,74 @@
+# =============================================================================
+# docker-compose.staging.yml - ambiente de STAGING (homologação)
+#
+# Usado pelo job "deploy-staging" do pipeline e por scripts/deploy.sh staging.
+# Diferenças em relação à produção: porta 8081, banco/volume/rede próprios,
+# ASPNETCORE_ENVIRONMENT=Staging e imagem com tag ":staging" do GHCR.
+#
+#   docker compose --env-file .env.staging -f docker-compose.staging.yml up -d --wait
+# =============================================================================
+name: compliance-staging
+
+services:
+  db:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    container_name: compliance-staging-db
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_PID: "Developer"
+      MSSQL_SA_PASSWORD: ${MSSQL_SA_PASSWORD:?defina MSSQL_SA_PASSWORD no .env.staging}
+      MSSQL_MEMORY_LIMIT_MB: ${MSSQL_MEMORY_LIMIT_MB:-2048}
+    ports:
+      - "${DB_PORT:-14331}:1433"
+    volumes:
+      - mssql-data-staging:/var/opt/mssql
+    networks:
+      - compliance-staging-net
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P \"$$MSSQL_SA_PASSWORD\" -C -Q \"SELECT 1\" || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 18
+      start_period: 30s
+    restart: unless-stopped
+
+  api:
+    # Em CI a imagem vem do GitHub Container Registry (já buildada e testada).
+    # Localmente, se a imagem não existir, o compose faz o build pelo Dockerfile.
+    image: ${API_IMAGE:-compliance-ambiental-api:staging}
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        APP_VERSION: ${APP_VERSION:-staging-local}
+        APP_COMMIT_SHA: ${APP_COMMIT_SHA:-local}
+        APP_BUILD_NUMBER: ${APP_BUILD_NUMBER:-local}
+    container_name: compliance-staging-api
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      ASPNETCORE_ENVIRONMENT: "Staging"
+      ASPNETCORE_URLS: "http://+:8080"
+      APP_ENVIRONMENT: "staging"
+      APP_VERSION: ${APP_VERSION:-staging-local}
+      APP_COMMIT_SHA: ${APP_COMMIT_SHA:-local}
+      APP_BUILD_NUMBER: ${APP_BUILD_NUMBER:-local}
+      APP_DEPLOYED_AT: ${APP_DEPLOYED_AT:-}
+      ConnectionStrings__DefaultConnection: "Server=db,1433;Database=${DB_NAME:-ComplianceAmbiental_Staging};User Id=sa;Password=${MSSQL_SA_PASSWORD};TrustServerCertificate=True;Encrypt=False"
+      Jwt__Issuer: ${JWT_ISSUER:-ComplianceAmbiental.Api}
+      Jwt__Audience: ${JWT_AUDIENCE:-ComplianceAmbiental.Client}
+      Jwt__SecretKey: ${JWT_SECRET_KEY:?defina JWT_SECRET_KEY no .env.staging}
+      Jwt__ExpiresInMinutes: ${JWT_EXPIRES_MINUTES:-120}
+    ports:
+      - "${API_PORT:-8081}:8080"
+    networks:
+      - compliance-staging-net
+    restart: unless-stopped
+
+volumes:
+  mssql-data-staging:
+
+networks:
+  compliance-staging-net:
+    driver: bridge

@@ -1,0 +1,225 @@
+{
+  "info": {
+    "name": "Compliance Ambiental Logtech API",
+    "description": "Coleção de testes da API RESTful de Compliance Ambiental Logtech (.NET Core 8). Execute primeiro 'Auth > Login' para popular automaticamente a variável {{token}}.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      { "key": "token", "value": "{{token}}", "type": "string" }
+    ]
+  },
+  "variable": [
+    { "key": "baseUrl", "value": "http://localhost:8080", "type": "string" },
+    { "key": "token", "value": "", "type": "string" }
+  ],
+  "item": [
+    {
+      "name": "Auth",
+      "item": [
+        {
+          "name": "Login (admin)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', function () { pm.response.to.have.status(200); });",
+                  "var json = pm.response.json();",
+                  "pm.collectionVariables.set('token', json.accessToken);",
+                  "console.log('Token salvo na variável {{token}}');"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"login\": \"admin\",\n  \"senha\": \"Admin@123\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/auth/login",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "auth", "login"]
+            }
+          }
+        },
+        {
+          "name": "Login (auditor)",
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"login\": \"auditor\",\n  \"senha\": \"Auditor@123\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/auth/login",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "auth", "login"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Operações",
+      "item": [
+        {
+          "name": "Listar operações (paginado)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/operacoes?pageNumber=1&pageSize=20",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "operacoes"],
+              "query": [
+                { "key": "pageNumber", "value": "1" },
+                { "key": "pageSize", "value": "20" },
+                { "key": "transportadoraId", "value": "1", "disabled": true },
+                { "key": "dataInicio", "value": "2026-01-01", "disabled": true },
+                { "key": "dataFim", "value": "2026-12-31", "disabled": true }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Registrar operação (calcula CO2)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"veiculoId\": 1,\n  \"dataOperacao\": \"2026-06-20T08:00:00Z\",\n  \"origem\": \"Santos/SP\",\n  \"destino\": \"São Paulo/SP\",\n  \"modal\": 1,\n  \"distanciaKm\": 950,\n  \"cargaToneladas\": 24\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/operacoes",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "operacoes"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Emissões",
+      "item": [
+        {
+          "name": "Consolidado mensal (paginado)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/emissoes/consolidado?pageNumber=1&pageSize=20",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "emissoes", "consolidado"],
+              "query": [
+                { "key": "pageNumber", "value": "1" },
+                { "key": "pageSize", "value": "20" },
+                { "key": "ano", "value": "2026", "disabled": true },
+                { "key": "mes", "value": "6", "disabled": true }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Alertas de ultrapassagem",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/emissoes/alertas?pageNumber=1&pageSize=20",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "emissoes", "alertas"],
+              "query": [
+                { "key": "pageNumber", "value": "1" },
+                { "key": "pageSize", "value": "20" }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Licenças",
+      "item": [
+        {
+          "name": "Status de compliance (paginado)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/licencas/status?pageNumber=1&pageSize=20",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "licencas", "status"],
+              "query": [
+                { "key": "pageNumber", "value": "1" },
+                { "key": "pageSize", "value": "20" },
+                { "key": "venceEmDias", "value": "30", "disabled": true },
+                { "key": "apenasIrregulares", "value": "true", "disabled": true }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Renovar licença (Admin)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"novaDataValidade\": \"2027-12-31T00:00:00Z\",\n  \"novoNumeroLicenca\": \"FEPAM-2026-1000\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/licencas/3/renovar",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "licencas", "3", "renovar"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Transportadoras",
+      "item": [
+        {
+          "name": "Listar com score de compliance (paginado)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/transportadoras?pageNumber=1&pageSize=20",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "transportadoras"],
+              "query": [
+                { "key": "pageNumber", "value": "1" },
+                { "key": "pageSize", "value": "20" },
+                { "key": "uf", "value": "SP", "disabled": true },
+                { "key": "busca", "value": "EcoLog", "disabled": true }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Dashboard ESG da transportadora",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/transportadoras/1/dashboard",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "transportadoras", "1", "dashboard"]
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

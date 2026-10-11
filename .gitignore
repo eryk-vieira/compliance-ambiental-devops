@@ -1,0 +1,20 @@
+bin/
+obj/
+.vs/
+.vscode/
+*.user
+*.suo
+[Bb]in/
+[Oo]bj/
+artifacts/
+TestResults/
+*.db
+.DS_Store
+
+# Variáveis de ambiente reais (apenas os *.example são versionados)
+.env
+.env.staging
+.env.production
+
+# Evidências geradas localmente pelos scripts
+evidence/
