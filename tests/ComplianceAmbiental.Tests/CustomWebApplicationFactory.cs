@@ -43,7 +43,17 @@ public class CustomWebApplicationFactory : WebApplicationFactory<Program>
             if (descriptor != null)
                 services.Remove(descriptor);
 
-            services.RemoveAll(typeof(IDbContextOptionsConfiguration<AppDbContext>));
+            // O tipo IDbContextOptionsConfiguration<T> vive em um namespace interno do EF Core
+            // (Microsoft.EntityFrameworkCore.Internal), por isso é localizado pelo nome, sem
+            // referenciar a API interna diretamente.
+            var optionsConfigurations = services
+                .Where(d => d.ServiceType.IsGenericType
+                            && d.ServiceType.Name.StartsWith("IDbContextOptionsConfiguration", StringComparison.Ordinal)
+                            && d.ServiceType.GenericTypeArguments.Contains(typeof(AppDbContext)))
+                .ToList();
+            foreach (var d in optionsConfigurations)
+                services.Remove(d);
+
             services.RemoveAll(typeof(AppDbContext));
 
             // Registra o provedor InMemory.
