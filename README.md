@@ -36,7 +36,7 @@ A API monitora a pegada de carbono das operações logísticas de transportadora
 
 ```bash
 # 1) clone o repositório
-git clone https://github.com/<seu-usuario>/compliance-ambiental-devops.git
+git clone https://github.com/eryk-vieira/compliance-ambiental-devops.git
 cd compliance-ambiental-devops
 
 # 2) crie o arquivo de variáveis de ambiente a partir do exemplo
@@ -96,7 +96,7 @@ bash scripts/deploy.sh staging --down       # derruba o ambiente
 ## 🔁 Pipeline CI/CD
 
 **Ferramenta:** GitHub Actions — workflow em [`.github/workflows/ci-cd.yml`](.github/workflows/ci-cd.yml).
-**Registro de imagens:** GitHub Container Registry (GHCR) — `ghcr.io/<seu-usuario>/compliance-ambiental-api`.
+**Registro de imagens:** GitHub Container Registry (GHCR) — `ghcr.io/eryk-vieira/compliance-ambiental-api`.
 **Ambientes:** GitHub *Environments* `staging` e `production` (o de produção com *required reviewers*, ou seja, aprovação manual antes do deploy).
 
 ### Gatilhos
@@ -185,7 +185,7 @@ ENTRYPOINT ["dotnet", "ComplianceAmbiental.Api.dll"]
 
 ### Imagem gerada
 
-`ghcr.io/<seu-usuario>/compliance-ambiental-api` com as tags `sha-<commit>` (imutável), `<branch>`, `build-<n>`, `staging`, `production` e `latest`.
+`ghcr.io/eryk-vieira/compliance-ambiental-api` com as tags `sha-<commit>` (imutável), `<branch>`, `build-<n>`, `staging`, `production` e `latest`.
 
 ---
 
@@ -217,22 +217,57 @@ Scripts de apoio em [`scripts/`](scripts/):
 
 ## 📸 Prints do funcionamento
 
-As evidências abaixo foram capturadas das execuções reais do pipeline no GitHub Actions e dos ambientes implantados. Os arquivos estão em [`docs/prints/`](docs/prints/) e as evidências textuais completas (logs, `compose ps`, respostas da API) em [`docs/evidencias/`](docs/evidencias/).
+Repositório: **https://github.com/eryk-vieira/compliance-ambiental-devops**
+Execução de referência do pipeline (commit `47a7b75`, branch `main`, status **Success**, 10m30s):
+**https://github.com/eryk-vieira/compliance-ambiental-devops/actions/runs/38490906947**
+Imagem publicada: **https://github.com/eryk-vieira/compliance-ambiental-devops/pkgs/container/compliance-ambiental-api**
+Histórico de deployments: **https://github.com/eryk-vieira/compliance-ambiental-devops/deployments**
 
-| # | Evidência | Arquivo |
-|---|---|---|
-| 1 | Workflow completo (build → test → docker → staging → produção) verde | `docs/prints/01-pipeline-geral.png` |
-| 2 | Job de build (restore, build, publish) | `docs/prints/02-build.png` |
-| 3 | Testes xUnit aprovados (relatório TRX) | `docs/prints/03-testes.png` |
-| 4 | Imagem publicada no GHCR com tags | `docs/prints/04-ghcr.png` |
-| 5 | Deploy em **staging**: compose up + smoke test | `docs/prints/05-deploy-staging.png` |
-| 6 | `/api/info` do ambiente **staging** | `docs/prints/06-staging-api-info.png` |
-| 7 | Aprovação manual do environment **production** | `docs/prints/07-aprovacao-producao.png` |
-| 8 | Deploy em **produção**: compose up + smoke test | `docs/prints/08-deploy-producao.png` |
-| 9 | `/api/info` do ambiente **produção** | `docs/prints/09-producao-api-info.png` |
-| 10 | Swagger da API em execução | `docs/prints/10-swagger.png` |
+As evidências textuais completas (`/api/info`, smoke tests e `docker compose ps` de cada ambiente) estão em [`docs/evidencias/run-2-summary.md`](docs/evidencias/run-2-summary.md). Os artefatos `evidence-staging-47a7b75` e `evidence-production-47a7b75` (logs dos containers, respostas da API, swagger) ficam anexados à execução no GitHub.
 
-> Links diretos para as execuções estão na seção *Prints* da documentação técnica (`docs/Documentacao_Tecnica_DevOps.pdf`).
+### 1. Pipeline completo (build → test → docker → staging → produção)
+
+![Pipeline completo](docs/prints/01-pipeline-geral.jpg)
+
+### 2. Build (.NET 8) — `Build succeeded. 0 Warning(s) 0 Error(s)`
+
+![Build](docs/prints/02-build.jpg)
+
+### 3. Testes automatizados — `Test Run Successful. Total tests: 15 Passed: 15`
+
+![Testes](docs/prints/03-testes.jpg)
+
+### 4. Imagem Docker publicada no GHCR (`sha-47a7b75`, `main`, `build-2`)
+
+![Docker push](docs/prints/04-docker-push-ghcr.jpg)
+
+### 5. Deploy em STAGING — `docker compose up`, `/api/info` com `"ambiente":"staging"` e smoke test 12/12
+
+![Deploy staging](docs/prints/05-deploy-staging.jpg)
+
+### 6. Pacote no GHCR com as tags promovidas (`staging`, `production`, `latest`)
+
+![GHCR](docs/prints/06-ghcr-package.jpg)
+
+### 7. Produção aguardando aprovação manual (environment `production` com *required reviewers*)
+
+![Aprovação](docs/prints/07-aprovacao-producao.jpg)
+
+### 8. Deploy em PRODUÇÃO — `/api/info` com `"ambiente":"production"` e smoke test 12/12
+
+![Deploy produção](docs/prints/08-deploy-producao.jpg)
+
+### 9. Containers de produção (`healthy`, banco sem porta exposta) e registro da aprovação
+
+![Produção compose ps](docs/prints/09-producao-compose-aprovacao.jpg)
+
+### 10. Histórico de deployments nos dois ambientes
+
+![Deployments](docs/prints/10-deployments-staging-production.jpg)
+
+### 11. Histórico de execuções (1ª execução falhou no build → correção → 2ª execução verde)
+
+![Execuções](docs/prints/11-historico-execucoes.jpg)
 
 ---
 
@@ -271,8 +306,8 @@ compliance-ambiental-devops/
 ├── postman/                             # coleção Postman
 ├── docs/
 │   ├── Documentacao_Tecnica_DevOps.pdf  # documentação técnica com evidências
-│   ├── prints/                          # capturas do pipeline e ambientes
-│   └── evidencias/                      # logs e saídas coletadas pelo pipeline
+│   ├── prints/                          # 11 capturas do pipeline e ambientes
+│   └── evidencias/                      # saídas coletadas pelo pipeline (run-2-summary.md)
 ├── ComplianceAmbiental.sln
 └── README.md
 ```
@@ -290,4 +325,3 @@ compliance-ambiental-devops/
 | README.md com instruções e prints | ☑ |
 | Documentação técnica com evidências (PDF ou PPT) | ☑ (`docs/Documentacao_Tecnica_DevOps.pdf`) |
 | Deploy realizado nos ambientes staging e produção | ☑ (jobs `deploy-staging` e `deploy-production`) |
-# compliance-ambiental-devops
